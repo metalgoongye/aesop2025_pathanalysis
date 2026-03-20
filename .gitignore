@@ -1,0 +1,18 @@
+# 데이터 파일
+*.xlsx
+*.csv
+*.xls
+
+# 결과 출력 폴더 (zip은 포함)
+results_output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
