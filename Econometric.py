@@ -8,10 +8,11 @@ from sklearn.decomposition import PCA
 df = pd.read_excel('E:/data/aesop2025/aesop2025.xlsx', sheet_name='시군구(행정구제외)')
 df = df[df['basic_gov'].notna()].copy()
 
-vars_disparity = ['lit_pc', 'grdp_pc', 'bnbl_rate', 'hale', 'subs', 'oldb']
-vars_uci       = ['DD', 'LUM', 'AC', 'SA']
+vars_disparity = ['bnbl_rate', 'oldb']                   # Urban Disparity (빈곤 + 노후화)
+vars_dev       = ['lit_pc', 'grdp_pc', 'hale']           # Urban Development Level (통제변수)
+vars_uci       = ['DD', 'LUM', 'AC', 'SA', 'subs']      # Urban Spatial Structure (+ 도시철도 유무)
 vars_carbon    = ['build_elec_e_pc', 'transport_e_pc', 'absor_pc']
-all_vars       = vars_disparity + vars_uci + vars_carbon
+all_vars       = vars_disparity + vars_dev + vars_uci + vars_carbon
 
 df_model = df[all_vars].dropna().copy()
 print(f"분석 관측치: {len(df_model)}개\n")
@@ -25,23 +26,27 @@ for col in all_vars:
 # ════════════════════════════════════════════════════════════════
 # 방법 1: Non-recursive SEM (상호영향 잠재변수 모델)
 # ════════════════════════════════════════════════════════════════
+# 구조:
+#   urban_disparity (bnbl_rate, no_subs, oldb) ↔ UCI (DD, LUM, AC, SA)
+#   urban_dev (lit_pc, grdp_pc, hale) → 모든 내생변수 (통제)
+#   carbon (build_elec_e_pc, transport_e_pc, absor_pc) ← UCI + urban_disparity + urban_dev
 # 식별 전략: 각 잠재변수의 지표가 상대방 방정식의 도구변수 역할
-#   - UCI 방정식 식별: disparity 지표(lit_pc 등)가 UCI 오차와 무관
+#   - UCI 방정식 식별: disparity 지표(bnbl_rate 등)가 UCI 오차와 무관
 #   - disparity 방정식 식별: UCI 지표(DD 등)가 disparity 오차와 무관
-# 비재귀모델의 교란항 공분산은 기본으로 자유추정
 
 model_nr = semopy.Model("""
     # 측정 모델
-    urban_disparity =~ lit_pc + grdp_pc + bnbl_rate + hale + subs + oldb
-    UCI             =~ DD + LUM + AC + SA
+    urban_disparity =~ bnbl_rate + oldb
+    urban_dev       =~ lit_pc + grdp_pc + hale
+    UCI             =~ DD + LUM + AC + SA + subs
     carbon          =~ build_elec_e_pc + transport_e_pc + absor_pc
 
-    # 구조 모델 (상호영향: non-recursive)
-    UCI             ~ urban_disparity
-    urban_disparity ~ UCI
-    carbon          ~ UCI + urban_disparity
+    # 구조 모델 (비재귀: urban_disparity ↔ UCI)
+    UCI             ~ urban_disparity + urban_dev
+    urban_disparity ~ UCI + urban_dev
+    carbon          ~ UCI + urban_disparity + urban_dev
 
-    # 비재귀 내생변수 교란항 공분산 (unmeasured common causes)
+    # 비재귀 내생변수 교란항 공분산
     UCI             ~~ urban_disparity
 """)
 
@@ -51,29 +56,42 @@ print("=" * 60)
 try:
     res_nr = model_nr.fit(df_z)
     params_nr = model_nr.inspect()
-    # 구조경로만 출력
-    structural = params_nr[params_nr['op'].isin(['~'])]
-    print("\n[구조 경로]\n", structural[['lval','op','rval','Estimate','Std. Err','z-value','p-value']].to_string(index=False))
+
+    latent_vars = ['urban_disparity', 'urban_dev', 'UCI', 'carbon']
+    structural = params_nr[
+        (params_nr['op'] == '~') &
+        params_nr['lval'].isin(latent_vars) &
+        params_nr['rval'].isin(latent_vars)
+    ]
+    print("\n[구조 경로]\n",
+          structural[['lval', 'op', 'rval', 'Estimate', 'Std. Err', 'z-value', 'p-value']].to_string(index=False))
 
     print("\n[모델 적합도]")
     fit_nr = semopy.calc_stats(model_nr)
-    idx = ['CFI', 'RMSEA', 'GFI', 'chi2', 'chi2 p-value', 'AIC', 'BIC']
-    for i in idx:
+    for i in ['CFI', 'RMSEA', 'GFI', 'chi2', 'chi2 p-value', 'AIC', 'BIC']:
         if i in fit_nr.index:
-            print(f"  {i:15s}: {fit_nr.loc[i,'Value']:.4f}")
+            print(f"  {i:15s}: {fit_nr.loc[i, 'Value']:.4f}")
 
     # 효과 분해
-    est = params_nr.set_index(['lval','op','rval'])['Estimate']
-    a      = est.get(('UCI',             '~', 'urban_disparity'), np.nan)
-    b      = est.get(('carbon',          '~', 'UCI'),             np.nan)
-    c      = est.get(('carbon',          '~', 'urban_disparity'), np.nan)
-    d      = est.get(('urban_disparity', '~', 'UCI'),             np.nan)
+    est = params_nr.set_index(['lval', 'op', 'rval'])['Estimate']
+    a            = est.get(('UCI',             '~', 'urban_disparity'), np.nan)
+    b            = est.get(('carbon',          '~', 'UCI'),             np.nan)
+    c            = est.get(('carbon',          '~', 'urban_disparity'), np.nan)
+    d            = est.get(('urban_disparity', '~', 'UCI'),             np.nan)
+    e_dev_uci    = est.get(('UCI',             '~', 'urban_dev'),       np.nan)
+    e_dev_disp   = est.get(('urban_disparity', '~', 'urban_dev'),       np.nan)
+    e_dev_carbon = est.get(('carbon',          '~', 'urban_dev'),       np.nan)
 
     print(f"\n[효과 분해: urban_disparity -> carbon]")
     print(f"  직접효과                        : {c:.4f}")
-    print(f"  간접효과 (-> UCI ->)             : {a:.4f} x {b:.4f} = {a*b:.4f}")
+    print(f"  간접효과 (-> UCI ->)            : {a:.4f} x {b:.4f} = {a*b:.4f}")
     print(f"  총효과                          : {c + a*b:.4f}")
-    print(f"\n[역방향: UCI -> urban_disparity  : {d:.4f}]")
+    print(f"\n[역방향: UCI -> urban_disparity] : {d:.4f}")
+
+    print(f"\n[통제변수: urban_dev 경로]")
+    print(f"  urban_dev -> UCI              : {e_dev_uci:.4f}")
+    print(f"  urban_dev -> urban_disparity  : {e_dev_disp:.4f}")
+    print(f"  urban_dev -> carbon (직접)    : {e_dev_carbon:.4f}")
 
 except Exception as e:
     print(f"  Non-recursive SEM 오류: {e}")
@@ -81,10 +99,10 @@ except Exception as e:
 
 # ════════════════════════════════════════════════════════════════
 # 방법 2: 2SLS (IV 추정) — factor score 기반
-# 각 탄소변수에 대해 개별 2SLS 모델 실행
 # 식별 전략:
-#   disparity_score 방정식 → UCI 지표(DD, LUM, AC, SA)를 IV로 사용
-#   UCI_score 방정식       → disparity 지표(lit_pc, grdp_pc 등)를 IV로 사용
+#   disparity_score 방정식 -> UCI 지표(DD, LUM, AC, SA)를 IV로 사용
+#   UCI_score 방정식       -> disparity 지표(bnbl_rate, no_subs, oldb)를 IV로 사용
+#   dev_score              -> 외생 통제변수 (exog)
 # ════════════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("방법 2: 2SLS (Factor Score 기반 IV 추정)")
@@ -93,7 +111,6 @@ print("=" * 60)
 try:
     from linearmodels.iv import IV2SLS
 
-    # PCA 1요인으로 합성점수 추출
     def get_factor_score(data, cols):
         pca = PCA(n_components=1)
         score = pca.fit_transform(stats.zscore(data[cols], axis=0))
@@ -102,22 +119,21 @@ try:
     df_z2 = df_z.copy().reset_index(drop=True)
     df_z2['disparity_score'] = get_factor_score(df_z2, vars_disparity)
     df_z2['uci_score']       = get_factor_score(df_z2, vars_uci)
+    df_z2['dev_score']       = get_factor_score(df_z2, vars_dev)
 
     print("\n[2SLS 모델 구조]")
     print("  내생변수: disparity_score, uci_score (상호내생)")
-    print("  IV for uci_score      <- DD, LUM, AC, SA")
-    print("  IV for disparity_score <- lit_pc, grdp_pc, bnbl_rate, hale, subs, oldb\n")
+    print("  외생통제: dev_score (Urban Development Level)")
+    print("  IV for uci_score       <- DD, LUM, AC, SA")
+    print("  IV for disparity_score <- bnbl_rate, no_subs, oldb\n")
 
     for carbon_var in vars_carbon:
         print(f"--- 종속변수: {carbon_var} ---")
-        # 2SLS: carbon ~ [uci_score + disparity_score] | [uci 지표 + disparity 지표]
-        # endog: uci_score, disparity_score
-        # instruments: 모든 지표 (교차 도구변수)
         iv_model = IV2SLS(
-            dependent  = df_z2[carbon_var],
-            exog       = None,
-            endog      = df_z2[['uci_score', 'disparity_score']],
-            instruments= df_z2[vars_uci + vars_disparity]
+            dependent   = df_z2[carbon_var],
+            exog        = df_z2[['dev_score']],
+            endog       = df_z2[['uci_score', 'disparity_score']],
+            instruments = df_z2[vars_uci + vars_disparity]
         )
         res_iv = iv_model.fit(cov_type='robust')
         print(res_iv.summary.tables[1])
