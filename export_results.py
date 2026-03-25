@@ -15,7 +15,7 @@ import zipfile, os, warnings
 warnings.filterwarnings('ignore')
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
-OUT = 'SEM_PathAnalysis_Results#5'
+OUT = 'SEM_PathAnalysis_Results#6'
 os.makedirs(OUT, exist_ok=True)
 
 # ── 데이터 ────────────────────────────────────────────────────
@@ -25,7 +25,7 @@ df_raw = df_raw[df_raw['basic_gov'].notna()].copy()
 vars_disparity = ['bnbl_rate', 'oldb']                   # Urban Disparity (빈곤 + 노후화)
 vars_dev       = ['lit_pc', 'grdp_pc', 'hale']           # Urban Development Level (통제변수)
 vars_uci       = ['DD', 'LUM', 'AC', 'SA', 'subs']      # Urban Spatial Structure (+ 도시철도 유무)
-vars_carbon    = ['build_elec_e_pc', 'transport_e_pc', 'absor_pc']
+vars_carbon    = ['build_elec_e_pc', 'transport_e_pc']
 all_vars       = vars_disparity + vars_dev + vars_uci + vars_carbon
 
 df_model = df_raw[all_vars].dropna().copy()
@@ -44,7 +44,7 @@ model_nr = semopy.Model("""
     urban_disparity =~ bnbl_rate + oldb
     urban_dev       =~ lit_pc + grdp_pc + hale
     UCI             =~ DD + LUM + AC + SA + subs
-    carbon          =~ build_elec_e_pc + transport_e_pc + absor_pc
+    carbon          =~ build_elec_e_pc + transport_e_pc
 
     UCI             ~ urban_disparity + urban_dev
     urban_disparity ~ UCI + urban_dev
@@ -288,7 +288,6 @@ row_idx = 5
 carbon_labels = {
     'build_elec_e_pc': 'Building Electricity',
     'transport_e_pc':  'Transport Energy',
-    'absor_pc':        'Absorption'
 }
 var_labels = {
     'uci_score':       'UCI Score (endog.)',
@@ -479,13 +478,12 @@ print("경로도 저장 완료")
 # ════════════════════════════════════════════════════════════════
 # 그래프 2: 2SLS 계수 비교 (탄소변수별, 3개 변수)
 # ════════════════════════════════════════════════════════════════
-fig, axes = plt.subplots(1, 3, figsize=(15, 5.5), sharey=False)
+fig, axes = plt.subplots(1, 2, figsize=(11, 5.5), sharey=False)
 fig.patch.set_facecolor('#F8F9FA')
 
 carbon_full = {
     'build_elec_e_pc': 'Building\nElectricity',
     'transport_e_pc':  'Transport\nEnergy',
-    'absor_pc':        'Absorption'
 }
 colors_iv = {
     'uci_score':       '#117A65',
@@ -774,7 +772,7 @@ print("개별 변수 기여도 저장 완료")
 # ════════════════════════════════════════════════════════════════
 # ZIP 묶기
 # ════════════════════════════════════════════════════════════════
-zip_path = 'SEM_PathAnalysis_Results#5.zip'
+zip_path = 'SEM_PathAnalysis_Results#6.zip'
 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
     for fname in os.listdir(OUT):
         zf.write(os.path.join(OUT, fname), fname)
